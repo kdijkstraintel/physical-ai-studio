@@ -7,8 +7,8 @@ This module provides dataclass configurations for the JEPA (Joint Embedding
 Predictive Architecture) world model used for visual prediction and planning.
 
 Example (API):
-    >>> from physicalai.policies.jepa import ModelConfig, TrainingConfig
-    >>> config = TrainingConfig(
+    >>> from physicalai.policies.jepa import JEPATrainingConfig
+    >>> config = JEPATrainingConfig(
     ...     img_size=224,
     ...     batch_size=16,
     ... )
@@ -17,6 +17,9 @@ Example (API):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from optparse import Option
+from pathlib import Path
+from typing import Optional, Tuple
 
 from physicalai.config import Config
 
@@ -38,6 +41,7 @@ class JEPAConfig(Config):
         ctxt_window: Context window size for inference (sliding window).
         frameskip: Number of frames to skip (temporal downsampling).
         action_skip: Number of actions between predictions.
+        pt_weights: Load pretrained weights. If whis is a Path then load weights from disk, otherwise load from hf hub.
     """
 
     # Model architecture
@@ -60,6 +64,16 @@ class JEPAConfig(Config):
     frameskip: int = 5
     action_skip: int = 1
 
+    # pt weights and normalization
+    pt_weights: Optional[Path | str] = None
+    image_mean: list[float] = (0.485, 0.456, 0.406)  # Imagenet
+    image_std: list[float] = (0.229, 0.224, 0.225) # Imagenet
+    action_mean: list[float] = (-0.0087, 0.0068) # pusht
+    action_std: list[float] = (0.2019, 0.2002) # pusht
+    state_mean: list[float] = (236.6155, 264.5674, 255.1307, 266.3721, 1.9584, -2.93032027, 2.54307914) # pusht
+    state_std: list[float] = (101.1202, 87.0112, 52.7054, 57.4971, 1.7556, 74.84556075, 74.14009094) # pusht
+    proprio_mean: list[float] = (236.6155, 264.5674, -2.93032027, 2.54307914) # pusht
+    proprio_std: list[float] = (101.1202, 87.0112, 74.84556075, 74.14009094) # pusht
 
 @dataclass
 class JEPATrainingConfig(JEPAConfig):
@@ -100,14 +114,15 @@ class JEPATrainingConfig(JEPAConfig):
     pred_type: str = "AdaLN"
     action_emb_dim: int = 10
 
-    # # Training
-    # batch_size: int = 8
-    # num_epochs: int = 1000
-    #
-    # learning_rate: float = 5e-4
-    # weight_decay: float = 1e-7
-    # warmup_epochs: int = 2
-    # clip_grad: float = 1.0
+    # Training
+    batch_size: int = 8
+    num_epochs: int = 1000
+
+    learning_rate: float = 5e-4
+    weight_decay: float = 1e-7
+    warmup_epochs: int = 2
+    clip_grad: float = 1.0
+    freeze_image_encoder: bool = True
 
     # Loss weights
     l2_loss_weight: float = 1.0
@@ -142,10 +157,6 @@ class JEPAInferenceConfig(JEPAConfig):
         max_steps_multiplier: Multiplier for max episode steps
             (max_steps = goal_horizon * frameskip * max_steps_multiplier).
     """
-
-    # Meta
-    seed: int = 1
-
     # Data
     goal_horizon: int = 6
 
