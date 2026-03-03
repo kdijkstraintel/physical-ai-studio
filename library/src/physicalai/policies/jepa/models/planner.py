@@ -59,7 +59,7 @@ def _lazy_import_nevergrad() -> tuple:
                 OnePlusOne,
                 TwoPointsDE)
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 ########### PLANNERS IN LATENT SPACE ###############
 
@@ -156,7 +156,7 @@ class NevergradPlanner(Planner):
             raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
     def _get_optimizer(self, plan_length: int):
-        (NGArray, ...) = _lazy_import_nevergrad()
+        NGArray, *_ = _lazy_import_nevergrad()
         parametrization = NGArray(shape=(self.horizon, self.action_dim))
         if self.max_norms is not None:
             lower_bounds = -np.ones((plan_length, self.action_dim))

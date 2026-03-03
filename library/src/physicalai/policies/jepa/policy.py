@@ -8,33 +8,32 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 
 from physicalai.data.observation import ACTION
 from physicalai.export.mixin_export import Export
 from physicalai.policies.base import Policy
+from physicalai.policies.jepa import JEPAConfig
 from physicalai.train.utils import reformat_dataset_to_match_policy
 
-from .config import SmolVLAConfig
-from .model import SmolVLAModel
+from .model import JEPAModel
 
 if TYPE_CHECKING:
     from physicalai.data import Observation
     from physicalai.gyms import Gym
 
-    from .preprocessor import SmolVLAPostprocessor, SmolVLAPreprocessor
 
+class JEPA(Export, Policy):
+    """JEPA Policy - FAIR's JEPA-WM policy
 
-class SmolVLA(Export, Policy):
-    """SmolVLA Policy - Hugging Face's flow matching VLA model.
-
-    Lightning wrapper for training and inference with SmolVLA model.
+    Lightning wrapper for training and inference with JEPA model.
 
     Uses dual-path initialization:
-    - **Lazy path**: `SmolVLA()` + `trainer.fit()` - model built in setup()
-    - **Eager path**: `SmolVLA.load_from_checkpoint()` - model built immediately
+    - **Lazy path**: `JEPA()` + `trainer.fit()` - model built in setup()
+    - **Eager path**: `JEPa.load_from_checkpoint()` - model built immediately
 
     Args:
         n_obs_steps: Number of observation steps to use. Default: 1.
@@ -86,92 +85,140 @@ class SmolVLA(Export, Policy):
 
     def __init__(  # noqa: PLR0913
         self,
-        # Input / output structure.
-        n_obs_steps: int = 1,
-        chunk_size: int = 50,
-        n_action_steps: int = 50,
-        # Shorter state and action vectors will be padded
-        max_state_dim: int = 32,
-        max_action_dim: int = 32,
-        # Image preprocessing
-        resize_imgs_with_padding: tuple[int, int] = (512, 512),
         *,
-        # Architecture
-        tokenizer_max_length: int = 48,
-        vlm_model_name: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",  # Select the VLM backbone.
-        load_vlm_weights: bool = False,  # Set to True in case of training the expert from scratch.
-        # True when init from pretrained SmolVLA weights
-        add_image_special_tokens: bool = False,  # Whether to use special image tokens around image features.
-        attention_mode: str = "cross_attn",
-        prefix_length: int = -1,
-        pad_language_to: str = "longest",  # "max_length"
-        num_expert_layers: int = -1,  # Less or equal to 0 is the default where the action expert has the same
-        # number of layers of VLM. Otherwise, the expert have less layers.
-        num_vlm_layers: int = 16,  # Number of layers used in the VLM (first num_vlm_layers layers)
-        self_attn_every_n_layers: int = 2,  # Interleave SA layers each self_attn_every_n_layers
-        expert_width_multiplier: float = 0.75,  # The action expert hidden size (wrt to the VLM)
-        min_period: float = 4e-3,  # sensitivity range for the timestep used in sine-cosine positional encoding
-        max_period: float = 4.0,
-        # Decoding
-        num_steps: int = 10,
-        # Attention utils
-        use_cache: bool = True,
-        # Finetuning settings
-        freeze_vision_encoder: bool = True,
-        train_expert_only: bool = True,
-        train_state_proj: bool = True,
-        # Training presets
-        optimizer_lr: float = 1e-4,
-        optimizer_betas: tuple[float, float] = (0.9, 0.95),
-        optimizer_eps: float = 1e-8,
-        optimizer_weight_decay: float = 1e-10,
-        optimizer_grad_clip_norm: float = 10,
-        scheduler_warmup_steps: int = 1_000,
-        scheduler_decay_steps: int = 30_000,
-        scheduler_decay_lr: float = 2.5e-6,
-        # Eager initialization (for checkpoint loading)
-        dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
+        img_size: int = 224,
+        enc_version: str = "dinov2_vits14",
+        pred_depth: int = 6,
+        pred_embed_dim: int = 384,
+        pred_num_heads: int = 16,
+        use_proprio: bool = True,
+        proprio_emb_dim: int = 16,
+        proprio_dim: int = 4,
+        action_dim: int = 2,
+        ctxt_window: int = 2,
+        frameskip: int = 5,
+        action_skip: int = 1,
+        pt_weights: Optional[Path] = None,
+        hf_weights: Optional[str] = None,
+        image_mean: list[float] = (0.485, 0.456, 0.406),
+        image_std: list[float] = (0.229, 0.224, 0.225),
+        action_mean: list[float] = (-0.0087, 0.0068),
+        action_std: list[float] = (0.2019, 0.2002),
+        state_mean: list[float] = (236.6155, 264.5674, 255.1307, 266.3721, 1.9584, -2.93032027, 2.54307914),
+        state_std: list[float] = (101.1202, 87.0112, 52.7054, 57.4971, 1.7556, 74.84556075, 74.14009094),
+        proprio_mean: list[float] = (236.6155, 264.5674, -2.93032027, 2.54307914),
+        proprio_std: list[float] = (101.1202, 87.0112, 74.84556075, 74.14009094),
+        num_hist: int = 3,
+        num_pred: int = 1,
+        enc_type: str = "dino",
+        pred_type: str = "AdaLN",
+        action_emb_dim: int = 10,
+        batch_size: int = 8,
+        num_epochs: int = 50,
+        ite: Optional[int] = None,
+        start_lr: float = 5e-4,
+        ref_lr: float = 5e-4,
+        final_lr: float = 5e-4,
+        weight_decay: float = 1e-7,
+        final_weight_decay: float = 1e-6,
+        warmup_epochs: int = 0,
+        freeze_image_encoder: bool = True,
+        use_radamw: bool = False,
+        betas: tuple = (0.9, 0.999),
+        eps: float = 1e-8,
+        ipe_scale: float = 1.0,
+        clip_grad: float = 1.0,
+        mixed_precision: bool = True,
+        dtype: str = "bfloat16",
+        l2_loss_weight: float = 1.0,
+        l1_loss_weight: float = 0.0,
+        cos_loss_weight: float = 0.0,
+        rollout_steps: int = 1,
+        rollout_stop_gradient: bool = True,
+        goal_horizon: int = 6,
+        planner_name: str = "cem",
+        iterations: int = 30,
+        num_samples: int = 300,
+        num_elites: int = 10,
+        horizon: int = 6,
+        var_scale: float = 1.0,
+        num_act_stepped: int = 6,
+        objective_type: str = "L2",
+        alpha: float = 0.1,
+        with_target: bool = True,
+        with_velocity: bool = True,
+        max_steps_multiplier: int = 10,
     ) -> None:
-        """Initialize SmolVLA policy.
+        """Initialize JEPA policy.
 
-        Creates SmolVLAConfig from explicit args and saves it as hyperparameters.
+        Creates JEPAConfig from explicit args and saves it as hyperparameters.
         """
-        super().__init__(n_action_steps=n_action_steps)
+        super().__init__(n_action_steps=frameskip)
 
         # Create config from explicit args (policy-level config)
-        self.config = SmolVLAConfig(
-            n_obs_steps=n_obs_steps,
-            chunk_size=chunk_size,
-            n_action_steps=n_action_steps,
-            max_state_dim=max_state_dim,
-            max_action_dim=max_action_dim,
-            resize_imgs_with_padding=resize_imgs_with_padding,
-            tokenizer_max_length=tokenizer_max_length,
-            vlm_model_name=vlm_model_name,
-            load_vlm_weights=load_vlm_weights,
-            add_image_special_tokens=add_image_special_tokens,
-            attention_mode=attention_mode,
-            prefix_length=prefix_length,
-            pad_language_to=pad_language_to,
-            num_expert_layers=num_expert_layers,
-            num_vlm_layers=num_vlm_layers,
-            self_attn_every_n_layers=self_attn_every_n_layers,
-            expert_width_multiplier=expert_width_multiplier,
-            min_period=min_period,
-            max_period=max_period,
-            num_steps=num_steps,
-            use_cache=use_cache,
-            freeze_vision_encoder=freeze_vision_encoder,
-            train_expert_only=train_expert_only,
-            train_state_proj=train_state_proj,
-            optimizer_lr=optimizer_lr,
-            optimizer_betas=optimizer_betas,
-            optimizer_eps=optimizer_eps,
-            optimizer_weight_decay=optimizer_weight_decay,
-            optimizer_grad_clip_norm=optimizer_grad_clip_norm,
-            scheduler_warmup_steps=scheduler_warmup_steps,
-            scheduler_decay_steps=scheduler_decay_steps,
-            scheduler_decay_lr=scheduler_decay_lr,
+        self.config = JEPAConfig(
+            img_size=img_size,
+            enc_version=enc_version,
+            pred_depth=pred_depth,
+            pred_embed_dim=pred_embed_dim,
+            pred_num_heads=pred_num_heads,
+            use_proprio=use_proprio,
+            proprio_emb_dim=proprio_emb_dim,
+            proprio_dim=proprio_dim,
+            action_dim=action_dim,
+            ctxt_window=ctxt_window,
+            frameskip=frameskip,
+            action_skip=action_skip,
+            pt_weights=pt_weights,
+            hf_weights=hf_weights,
+            image_mean=image_mean,
+            image_std=image_std,
+            action_mean=action_mean,
+            action_std=action_std,
+            state_mean=state_mean,
+            state_std=state_std,
+            proprio_mean=proprio_mean,
+            proprio_std=proprio_std,
+            num_hist=num_hist,
+            num_pred=num_pred,
+            enc_type=enc_type,
+            pred_type=pred_type,
+            action_emb_dim=action_emb_dim,
+            batch_size=batch_size,
+            num_epochs=num_epochs,
+            ite=ite,
+            start_lr=start_lr,
+            ref_lr=ref_lr,
+            final_lr=final_lr,
+            weight_decay=weight_decay,
+            final_weight_decay=final_weight_decay,
+            warmup_epochs=warmup_epochs,
+            freeze_image_encoder=freeze_image_encoder,
+            use_radamw=use_radamw,
+            betas=betas,
+            eps=eps,
+            ipe_scale=ipe_scale,
+            clip_grad=clip_grad,
+            mixed_precision=mixed_precision,
+            dtype=dtype,
+            l2_loss_weight=l2_loss_weight,
+            l1_loss_weight=l1_loss_weight,
+            cos_loss_weight=cos_loss_weight,
+            rollout_steps=rollout_steps,
+            rollout_stop_gradient=rollout_stop_gradient,
+            goal_horizon=goal_horizon,
+            planner_name=planner_name,
+            iterations=iterations,
+            num_samples=num_samples,
+            num_elites=num_elites,
+            horizon=horizon,
+            var_scale=var_scale,
+            num_act_stepped=num_act_stepped,
+            objective_type=objective_type,
+            alpha=alpha,
+            with_target=with_target,
+            with_velocity=with_velocity,
+            max_steps_multiplier=max_steps_multiplier,
         )
 
         # Save config as hyperparameters for checkpoint restoration
@@ -180,17 +227,18 @@ class SmolVLA(Export, Policy):
         self.hparams["config"] = self.config.to_dict()
 
         # Model will be built in setup() or immediately if env_action_dim provided
-        self.model: SmolVLAModel | None = None
+        self.model: JEPAModel | None = None
 
-        # Preprocessor/postprocessor set in setup() or _initialize_model()
-        self._preprocessor: SmolVLAPreprocessor | None = None
-        self._postprocessor: SmolVLAPostprocessor | None = None
-
-        # Eager initialization if dataset_stats is provided
-        if dataset_stats is not None:
-            self._initialize_model(dataset_stats)
-
-        self._dataset_stats = dataset_stats
+        # TODO: Implement pre/post processing
+        # # Preprocessor/postprocessor set in setup() or _initialize_model()
+        # self._preprocessor: SmolVLAPreprocessor | None = None
+        # self._postprocessor: SmolVLAPostprocessor | None = None
+        #
+        # # Eager initialization if dataset_stats is provided
+        # if dataset_stats is not None:
+        #     self._initialize_model(dataset_stats)
+        #
+        # self._dataset_stats = dataset_stats
 
     def _initialize_model(
         self,
@@ -204,39 +252,72 @@ class SmolVLA(Export, Policy):
             env_action_dim: Environment action dimension.
             dataset_stats: Dataset normalization statistics.
         """
-        from .preprocessor import make_smolvla_preprocessors  # noqa: PLC0415
+        # TODO: Implement dataset_stats to infer config parameters
+        # from .preprocessor import make_smolvla_preprocessors  # noqa: PLC0415
 
-        self.model = SmolVLAModel(
-            dataset_stats,
-            chunk_size=self.config.chunk_size,
-            max_state_dim=self.config.max_state_dim,
-            max_action_dim=self.config.max_action_dim,
-            resize_imgs_with_padding=self.config.resize_imgs_with_padding,
-            adapt_to_pi_aloha=self.config.adapt_to_pi_aloha,
-            num_steps=self.config.num_steps,
-            use_cache=self.config.use_cache,
-            freeze_vision_encoder=self.config.freeze_vision_encoder,
-            train_expert_only=self.config.train_expert_only,
-            train_state_proj=self.config.train_state_proj,
-            vlm_model_name=self.config.vlm_model_name,
-            load_vlm_weights=self.config.load_vlm_weights,
-            add_image_special_tokens=self.config.add_image_special_tokens,
-            attention_mode=self.config.attention_mode,
-            prefix_length=self.config.prefix_length,
-            num_expert_layers=self.config.num_expert_layers,
-            num_vlm_layers=self.config.num_vlm_layers,
-            self_attn_every_n_layers=self.config.self_attn_every_n_layers,
-            expert_width_multiplier=self.config.expert_width_multiplier,
-            min_period=self.config.min_period,
-            max_period=self.config.max_period,
-        )
-
-        self._preprocessor, self._postprocessor = make_smolvla_preprocessors(
-            max_state_dim=self.config.max_state_dim,
-            max_action_dim=self.config.max_action_dim,
-            stats=dataset_stats,
-            image_resolution=self.config.resize_imgs_with_padding,
-            max_token_len=self.config.tokenizer_max_length,
+        self.model = JEPAModel(
+            img_size=self.config.img_size,
+            enc_version=self.config.enc_version,
+            pred_depth=self.config.pred_depth,
+            pred_embed_dim=self.config.pred_embed_dim,
+            pred_num_heads=self.config.pred_num_heads,
+            use_proprio=self.config.use_proprio,
+            proprio_emb_dim=self.config.proprio_emb_dim,
+            proprio_dim=self.config.proprio_dim,
+            action_dim=self.config.action_dim,
+            ctxt_window=self.config.ctxt_window,
+            frameskip=self.config.frameskip,
+            action_skip=self.config.action_skip,
+            pt_weights=self.config.pt_weights,
+            hf_weights=self.config.hf_weights,
+            image_mean=self.config.image_mean,
+            image_std=self.config.image_std,
+            action_mean=self.config.action_mean,
+            action_std=self.config.action_std,
+            state_mean=self.config.state_mean,
+            state_std=self.config.state_std,
+            proprio_mean=self.config.proprio_mean,
+            proprio_std=self.config.proprio_std,
+            num_hist=self.config.num_hist,
+            num_pred=self.config.num_pred,
+            enc_type=self.config.enc_type,
+            pred_type=self.config.pred_type,
+            action_emb_dim=self.config.action_emb_dim,
+            batch_size=self.config.batch_size,
+            num_epochs=self.config.num_epochs,
+            ite=self.config.ite,
+            start_lr=self.config.start_lr,
+            ref_lr=self.config.ref_lr,
+            final_lr=self.config.final_lr,
+            weight_decay=self.config.weight_decay,
+            final_weight_decay=self.config.final_weight_decay,
+            warmup_epochs=self.config.warmup_epochs,
+            freeze_image_encoder=self.config.freeze_image_encoder,
+            use_radamw=self.config.use_radamw,
+            betas=self.config.betas,
+            eps=self.config.eps,
+            ipe_scale=self.config.ipe_scale,
+            clip_grad=self.config.clip_grad,
+            mixed_precision=self.config.mixed_precision,
+            dtype=self.config.dtype,
+            l2_loss_weight=self.config.l2_loss_weight,
+            l1_loss_weight=self.config.l1_loss_weight,
+            cos_loss_weight=self.config.cos_loss_weight,
+            rollout_steps=self.config.rollout_steps,
+            rollout_stop_gradient=self.config.rollout_stop_gradient,
+            goal_horizon=self.config.goal_horizon,
+            planner_name=self.config.planner_name,
+            iterations=self.config.iterations,
+            num_samples=self.config.num_samples,
+            num_elites=self.config.num_elites,
+            horizon=self.config.horizon,
+            var_scale=self.config.var_scale,
+            num_act_stepped=self.config.num_act_stepped,
+            objective_type=self.config.objective_type,
+            alpha=self.config.alpha,
+            with_target=self.config.with_target,
+            with_velocity=self.config.with_velocity,
+            max_steps_multiplier=self.config.max_steps_multiplier,
         )
 
     def setup(self, stage: str) -> None:
@@ -295,7 +376,9 @@ class SmolVLA(Export, Policy):
                 msg = "Model is not initialized"
                 raise ValueError(msg)
 
-            processed_batch = self._preprocessor(batch.to_dict())
+            # TODO implement preprocessing
+            # processed_batch = self._preprocessor(batch.to_dict())
+            processed_batch = batch.to_dict()
             return self.model(processed_batch)
         return self.predict_action_chunk(batch)
 
@@ -312,13 +395,18 @@ class SmolVLA(Export, Policy):
         Raises:
             ValueError: If the model has not been initialized.
         """
-        if self.model is None or self._preprocessor is None or self._postprocessor is None:
+        # TODO: Implement pre/post processor
+        # if self.model is None or self._preprocessor is None or self._postprocessor is None:
+        if self.model is None:
             msg = "Model is not initialized"
             raise ValueError(msg)
 
-        processed_batch = self._preprocessor(batch.to(self.device).to_dict())
-        chunk = self.model.predict_action_chunk(processed_batch)
-        return self._postprocessor({ACTION: chunk})[ACTION]
+        # processed_batch = self._preprocessor(batch.to(self.device).to_dict())
+        # chunk = self.model.predict_action_chunk(processed_batch)
+        # return self._postprocessor({ACTION: chunk})[ACTION]
+
+        chunk = self.model.predict_action_chunk(batch.to(self.device).to_dict())
+        return chunk[ACTION]
 
     def training_step(self, batch: Observation, batch_idx: int) -> torch.Tensor:
         """Lightning training step.

@@ -15,6 +15,7 @@ from .groot import Groot, GrootConfig, GrootModel
 from .lerobot import get_lerobot_policy
 from .pi0 import Pi0, Pi0Config, Pi0Model, Pi05, Pi05Config
 from .smolvla import SmolVLA, SmolVLAConfig, SmolVLAModel
+from .jepa import JEPA, JEPAModel, JEPAConfig
 
 if TYPE_CHECKING:
     from .base import Policy
@@ -31,6 +32,10 @@ __all__ = [
     "Groot",
     "GrootConfig",
     "GrootModel",
+    # JEPA
+    "JEPA",
+    "JEPAModel",
+    "JEPAConfig",
     # Pi0
     "Pi0",
     "Pi0Config",

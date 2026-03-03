@@ -3,8 +3,8 @@
 
 """SmolVLA Policy - HuggingFace's flow matching VLA model."""
 
-from .config import JEPAConfig, JEPATrainingConfig, JEPAInferenceConfig
-from .model import SmolVLAModel
-from .policy import SmolVLA
+from .config import JEPAConfig
+from .model import JEPAModel
+from .policy import JEPA
 
-__all__ = ["SmolVLA", "JEPAConfig", "JEPATrainingConfig", "JEPAInferenceConfig", "SmolVLAModel"]
+__all__ = ["JEPA", "JEPAModel", "JEPAConfig"]

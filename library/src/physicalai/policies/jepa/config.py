@@ -29,6 +29,7 @@ class JEPAConfig(Config):
     """Base configuration for JEPA world model.
 
     Attributes:
+        # General
         img_size: Input image size (square).
         enc_version: Vision encoder version (e.g., "dinov2_vits14").
         pred_depth: Number of transformer layers in the predictor.
@@ -41,7 +42,48 @@ class JEPAConfig(Config):
         ctxt_window: Context window size for inference (sliding window).
         frameskip: Number of frames to skip (temporal downsampling).
         action_skip: Number of actions between predictions.
-        pt_weights: Load pretrained weights. If whis is a Path then load weights from disk, otherwise load from hf hub.
+        pt_weights: Load pretrained weights trained by the JEPA repo.
+        hf_weights: Load pretrained weigths from HuggingFace hub.
+
+        # Training
+        num_hist: Number of context frames for training.
+        num_pred: Number of frames to predict.
+        enc_type: Encoder type (e.g., "dino").
+        pred_type: Predictor type ("AdaLN" or "dino_wm").
+        action_emb_dim: Action embedding dimension.
+        batch_size: Training batch size.
+        num_epochs: Total number of training epochs.
+        learning_rate: Optimizer learning rate.
+        weight_decay: Optimizer weight decay.
+        warmup_epochs: Number of warmup epochs for learning rate scheduler.
+        clip_grad: Gradient clipping threshold.
+        l2_loss_weight: Weight for L2 loss component.
+        l1_loss_weight: Weight for L1 loss component.
+        cos_loss_weight: Weight for cosine similarity loss component.
+        rollout_steps: Number of rollout steps (1 = single-step, >1 = multi-step).
+        rollout_stop_gradient: Whether to stop gradients through rollout steps.
+        checkpoint_dir: Directory to save checkpoints.
+        log_freq: Log every N batches.
+        val_freq: Validate every N epochs.
+        save_freq: Save checkpoint every N epochs.
+
+        # Inference
+        seed: Random seed for reproducibility.
+        goal_horizon: Goal horizon (number of high-level steps for goal).
+        planner_name: Planner algorithm name (e.g., "cem").
+        iterations: Number of planner optimization iterations.
+        num_samples: Number of action samples per iteration.
+        num_elites: Number of elite samples to keep.
+        horizon: Planner lookahead horizon.
+        var_scale: Variance scale for sampling.
+        num_act_stepped: Number of actions to step in environment.
+        objective_type: Objective function type (e.g., "L2").
+        alpha: Objective weighting factor.
+        with_target: Whether to include target in environment.
+        with_velocity: Whether to include velocity in state.
+        max_steps_multiplier: Multiplier for max episode steps
+            (max_steps = goal_horizon * frameskip * max_steps_multiplier).
+
     """
 
     # Model architecture
@@ -65,45 +107,16 @@ class JEPAConfig(Config):
     action_skip: int = 1
 
     # pt weights and normalization
-    pt_weights: Optional[Path | str] = None
+    pt_weights: Optional[Path] = (None,)
+    hf_weights: Optional[str] = (None,)
     image_mean: list[float] = (0.485, 0.456, 0.406)  # Imagenet
-    image_std: list[float] = (0.229, 0.224, 0.225) # Imagenet
-    action_mean: list[float] = (-0.0087, 0.0068) # pusht
-    action_std: list[float] = (0.2019, 0.2002) # pusht
-    state_mean: list[float] = (236.6155, 264.5674, 255.1307, 266.3721, 1.9584, -2.93032027, 2.54307914) # pusht
-    state_std: list[float] = (101.1202, 87.0112, 52.7054, 57.4971, 1.7556, 74.84556075, 74.14009094) # pusht
-    proprio_mean: list[float] = (236.6155, 264.5674, -2.93032027, 2.54307914) # pusht
-    proprio_std: list[float] = (101.1202, 87.0112, 74.84556075, 74.14009094) # pusht
-
-@dataclass
-class JEPATrainingConfig(JEPAConfig):
-    """Training configuration for JEPA world model.
-
-    Extends ModelConfig with training-specific parameters including
-    optimization, loss weighting
-
-    Attributes:
-        num_hist: Number of context frames for training.
-        num_pred: Number of frames to predict.
-        enc_type: Encoder type (e.g., "dino").
-        pred_type: Predictor type ("AdaLN" or "dino_wm").
-        action_emb_dim: Action embedding dimension.
-        batch_size: Training batch size.
-        num_epochs: Total number of training epochs.
-        learning_rate: Optimizer learning rate.
-        weight_decay: Optimizer weight decay.
-        warmup_epochs: Number of warmup epochs for learning rate scheduler.
-        clip_grad: Gradient clipping threshold.
-        l2_loss_weight: Weight for L2 loss component.
-        l1_loss_weight: Weight for L1 loss component.
-        cos_loss_weight: Weight for cosine similarity loss component.
-        rollout_steps: Number of rollout steps (1 = single-step, >1 = multi-step).
-        rollout_stop_gradient: Whether to stop gradients through rollout steps.
-        checkpoint_dir: Directory to save checkpoints.
-        log_freq: Log every N batches.
-        val_freq: Validate every N epochs.
-        save_freq: Save checkpoint every N epochs.
-    """
+    image_std: list[float] = (0.229, 0.224, 0.225)  # Imagenet
+    action_mean: list[float] = (-0.0087, 0.0068)  # pusht
+    action_std: list[float] = (0.2019, 0.2002)  # pusht
+    state_mean: list[float] = (236.6155, 264.5674, 255.1307, 266.3721, 1.9584, -2.93032027, 2.54307914)  # pusht
+    state_std: list[float] = (101.1202, 87.0112, 52.7054, 57.4971, 1.7556, 74.84556075, 74.14009094)  # pusht
+    proprio_mean: list[float] = (236.6155, 264.5674, -2.93032027, 2.54307914)  # pusht
+    proprio_std: list[float] = (101.1202, 87.0112, 74.84556075, 74.14009094)  # pusht
 
     # Data
     num_hist: int = 3
@@ -116,13 +129,27 @@ class JEPATrainingConfig(JEPAConfig):
 
     # Training
     batch_size: int = 8
-    num_epochs: int = 1000
+    num_epochs: int = 50
+    ite: Optional[int] = None
 
-    learning_rate: float = 5e-4
+    start_lr: float = 5e-4
+    ref_lr: float = 5e-4
+    final_lr: float = 5e-4
     weight_decay: float = 1e-7
-    warmup_epochs: int = 2
-    clip_grad: float = 1.0
+    final_weight_decay: float = 1e-6
+    warmup_epochs: int = 0
     freeze_image_encoder: bool = True
+
+    # Optimizer settings
+    use_radamw: bool = False
+    betas: tuple = (0.9, 0.999)
+    eps: float = 1e-8
+    ipe_scale: float = 1.0
+    clip_grad: float = 1.0
+
+    # Mixed precision
+    mixed_precision: bool = True
+    dtype: str = "bfloat16"  # "bfloat16", "float16", or "float32"
 
     # Loss weights
     l2_loss_weight: float = 1.0
@@ -133,30 +160,6 @@ class JEPATrainingConfig(JEPAConfig):
     rollout_steps: int = 1
     rollout_stop_gradient: bool = True
 
-@dataclass
-class JEPAInferenceConfig(JEPAConfig):
-    """Evaluation configuration for JEPA world model.
-
-    Extends ModelConfig with evaluation-specific parameters including checkpoint
-    loading, planner settings, and environment configuration.
-
-    Attributes:
-        seed: Random seed for reproducibility.
-        goal_horizon: Goal horizon (number of high-level steps for goal).
-        planner_name: Planner algorithm name (e.g., "cem").
-        iterations: Number of planner optimization iterations.
-        num_samples: Number of action samples per iteration.
-        num_elites: Number of elite samples to keep.
-        horizon: Planner lookahead horizon.
-        var_scale: Variance scale for sampling.
-        num_act_stepped: Number of actions to step in environment.
-        objective_type: Objective function type (e.g., "L2").
-        alpha: Objective weighting factor.
-        with_target: Whether to include target in environment.
-        with_velocity: Whether to include velocity in state.
-        max_steps_multiplier: Multiplier for max episode steps
-            (max_steps = goal_horizon * frameskip * max_steps_multiplier).
-    """
     # Data
     goal_horizon: int = 6
 
